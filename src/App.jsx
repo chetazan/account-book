@@ -2105,117 +2105,81 @@ function App() {
     <div className="app">
       <header className="header">
         <h1>💰 가계부</h1>
-        {transactions.length > 0 && (
-          <>
-            <div className="summary">
-              <div className="summary-item income">
-                <span className="label">수입</span>
-                <span className="amount">
-                  +{totalIncome.toLocaleString()}원
-                </span>
-              </div>
-              <div className="summary-item expense">
-                <span className="label">지출</span>
-                <span className="amount">
-                  -{totalExpense.toLocaleString()}원
-                </span>
-              </div>
-              <div className="summary-item balance">
-                <span className="label">잔액</span>
-                <span
-                  className={`amount ${balance >= 0 ? "positive" : "negative"}`}
-                >
-                  {balance.toLocaleString()}원
-                </span>
-              </div>
+        <div className="summary">
+          <div className="summary-item income">
+            <span className="label">수입</span>
+            <span className="amount">
+              +{totalIncome.toLocaleString()}원
+            </span>
+          </div>
+          <div className="summary-item expense">
+            <span className="label">지출</span>
+            <span className="amount">
+              -{totalExpense.toLocaleString()}원
+            </span>
+          </div>
+          <div className="summary-item balance">
+            <span className="label">잔액</span>
+            <span
+              className={`amount ${balance >= 0 ? "positive" : "negative"}`}
+            >
+              {balance.toLocaleString()}원
+            </span>
+          </div>
+        </div>
+        <div className="file-management-summary">
+          <div className="file-management-item">
+            <div className="file-management-icon">➕</div>
+            <div className="file-management-content">
+              <span className="file-management-title">거래 내역 추가</span>
+              <span className="file-management-desc">
+                카드사 거래내역 파일 업로드
+              </span>
             </div>
-            <div className="file-management-summary">
-              <div className="file-management-item">
-                <div className="file-management-icon">➕</div>
-                <div className="file-management-content">
-                  <span className="file-management-title">거래 내역 추가</span>
-                  <span className="file-management-desc">
-                    카드사 거래내역 파일 업로드
-                  </span>
-                </div>
-                <button
-                  type="button"
-                  onClick={handleOpenAccountModal}
-                  className="file-management-button"
-                >
-                  추가하기
-                </button>
-                <input
-                  id="file-upload"
-                  ref={fileInputRef}
-                  type="file"
-                  accept=".xls,.xlsx,.html,.htm"
-                  onChange={handleFileUpload}
-                  className="file-upload-input"
-                />
-              </div>
-              <div className="file-management-item">
-                <div className="file-management-icon">🔄</div>
-                <div className="file-management-content">
-                  <span className="file-management-title">파일 교체</span>
-                  <span className="file-management-desc warning">
-                    ⚠️ 기존 데이터 삭제됨
-                  </span>
-                </div>
-                <label
-                  htmlFor="main-file-reload"
-                  className="file-management-button"
-                >
-                  파일 선택
-                </label>
-                <input
-                  id="main-file-reload"
-                  ref={mainFileInputRef}
-                  type="file"
-                  accept=".xlsx,.xls"
-                  onChange={handleLoadMainFile}
-                  className="file-upload-input"
-                />
-              </div>
+            <button
+              type="button"
+              onClick={handleOpenAccountModal}
+              className="file-management-button"
+            >
+              추가하기
+            </button>
+            <input
+              id="file-upload"
+              ref={fileInputRef}
+              type="file"
+              accept=".xls,.xlsx,.html,.htm"
+              onChange={handleFileUpload}
+              className="file-upload-input"
+            />
+          </div>
+          <div className="file-management-item">
+            <div className="file-management-icon">🔄</div>
+            <div className="file-management-content">
+              <span className="file-management-title">파일 교체</span>
+              <span className="file-management-desc warning">
+                ⚠️ 기존 데이터 삭제됨
+              </span>
             </div>
-          </>
-        )}
+            <label
+              htmlFor="main-file-reload"
+              className="file-management-button"
+            >
+              파일 선택
+            </label>
+            <input
+              id="main-file-reload"
+              ref={mainFileInputRef}
+              type="file"
+              accept=".xlsx,.xls"
+              onChange={handleLoadMainFile}
+              className="file-upload-input"
+            />
+          </div>
+        </div>
       </header>
 
       <main className="main">
-        {transactions.length === 0 ? (
-          <section className="empty-state-section">
-            <div className="empty-state">
-              <h2>📊 가계부 파일 불러오기</h2>
-              <p>엑셀 파일을 불러와서 작업을 시작하세요.</p>
-              <div className="file-upload-card">
-                <div className="file-upload-icon">📁</div>
-                <h3>가계부 엑셀 파일 불러오기</h3>
-                <p className="file-upload-description">
-                  저장된 가계부 엑셀 파일을 불러와서 작업을 시작합니다.
-                  <br />
-                  (기존 내보내기 형식의 .xlsx 파일)
-                </p>
-                <label
-                  htmlFor="main-file-upload"
-                  className="file-upload-button primary"
-                >
-                  파일 선택
-                </label>
-                <input
-                  id="main-file-upload"
-                  ref={mainFileInputRef}
-                  type="file"
-                  accept=".xlsx,.xls"
-                  onChange={handleLoadMainFile}
-                  className="file-upload-input"
-                />
-              </div>
-            </div>
-          </section>
-        ) : (
-          <>
-            <section className="form-section">
+        <section className="form-section">
               <h2>내역 추가</h2>
 
               <form onSubmit={handleSubmit} className="transaction-form">
@@ -2675,8 +2639,6 @@ function App() {
                 )}
               </div>
             </section>
-          </>
-        )}
       </main>
 
       {/* 파일명 입력 모달 */}
