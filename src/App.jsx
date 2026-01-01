@@ -79,17 +79,25 @@ function App() {
           const data = new Uint8Array(e.target.result);
           const workbook = XLSX.read(data, { type: "array" });
 
-          // "거래 내역" 시트 찾기
+          // 먼저 "거래 내역" 시트 찾기 (기존 포맷)
           let transactionSheet = null;
-          for (const sheetName of workbook.SheetNames) {
-            if (sheetName === "거래 내역") {
-              transactionSheet = workbook.Sheets[sheetName];
+          let sheetName = null;
+          for (const name of workbook.SheetNames) {
+            if (name === "거래 내역") {
+              transactionSheet = workbook.Sheets[name];
+              sheetName = name;
               break;
             }
           }
 
+          // "거래 내역" 시트가 없으면 첫 번째 시트 사용 (새 포맷)
+          if (!transactionSheet && workbook.SheetNames.length > 0) {
+            sheetName = workbook.SheetNames[0];
+            transactionSheet = workbook.Sheets[sheetName];
+          }
+
           if (!transactionSheet) {
-            reject(new Error('"거래 내역" 시트를 찾을 수 없습니다.'));
+            reject(new Error("엑셀 파일에서 시트를 찾을 수 없습니다."));
             return;
           }
 
@@ -106,6 +114,125 @@ function App() {
 
           // 헤더 행 확인
           const header = jsonData[0];
+
+          // 입금/출금 포맷 확인 (날짜, 내역, 입금, 출금)
+          const dateIndex = header.findIndex(
+            (h) => String(h || "").trim() === "날짜"
+          );
+          const detailIndex = header.findIndex(
+            (h) => String(h || "").trim() === "내역"
+          );
+          const depositIndex = header.findIndex(
+            (h) => String(h || "").trim() === "입금"
+          );
+          const withdrawalIndex = header.findIndex(
+            (h) => String(h || "").trim() === "출금"
+          );
+
+          // 입금/출금 포맷인 경우
+          if (
+            dateIndex !== -1 &&
+            detailIndex !== -1 &&
+            (depositIndex !== -1 || withdrawalIndex !== -1)
+          ) {
+            const transactions = [];
+
+            // 데이터 행 파싱 (헤더 제외)
+            for (let i = 1; i < jsonData.length; i++) {
+              const row = jsonData[i];
+
+              // 빈 행 건너뛰기
+              if (!row || row.length === 0) {
+                continue;
+              }
+
+              const date = String(row[dateIndex] || "").trim();
+              const description = String(row[detailIndex] || "").trim();
+              const deposit =
+                row[depositIndex] !== undefined
+                  ? parseFloat(row[depositIndex])
+                  : 0;
+              const withdrawal =
+                row[withdrawalIndex] !== undefined
+                  ? parseFloat(row[withdrawalIndex])
+                  : 0;
+
+              // 날짜와 내역이 없으면 건너뛰기
+              if (!date || !description) {
+                continue;
+              }
+
+              // 입금과 출금이 모두 0이거나 없으면 건너뛰기
+              if (
+                (!deposit || deposit === 0) &&
+                (!withdrawal || withdrawal === 0)
+              ) {
+                continue;
+              }
+
+              // 날짜 형식 변환
+              let parsedDate = date;
+              if (!isNaN(parseFloat(date)) && parseFloat(date) > 25569) {
+                // 엑셀 날짜 숫자 형식
+                try {
+                  const excelDateNum = parseFloat(date);
+                  const excelDate = XLSX.SSF.parse_date_code(excelDateNum);
+                  if (excelDate) {
+                    const year = excelDate.y;
+                    const month = String(excelDate.m).padStart(2, "0");
+                    const day = String(excelDate.d).padStart(2, "0");
+                    parsedDate = `${year}-${month}-${day}`;
+                  }
+                } catch (e) {
+                  // 파싱 실패 시 원본 사용
+                }
+              } else if (date.includes("/") || date.includes("-")) {
+                // 일반 날짜 문자열 처리
+                const dateObj = new Date(date);
+                if (!isNaN(dateObj.getTime())) {
+                  parsedDate = dateObj.toISOString().split("T")[0];
+                }
+              }
+
+              // 입금이 있으면 수입으로 추가
+              if (deposit && deposit > 0) {
+                transactions.push({
+                  id: Date.now() + i * 2,
+                  type: "income",
+                  category: "",
+                  subCategory: "",
+                  account: "",
+                  amount: deposit,
+                  description: description,
+                  date: parsedDate,
+                });
+              }
+
+              // 출금이 있으면 지출로 추가
+              if (withdrawal && withdrawal > 0) {
+                transactions.push({
+                  id: Date.now() + i * 2 + 1,
+                  type: "expense",
+                  category: "",
+                  subCategory: "",
+                  account: "",
+                  amount: withdrawal,
+                  description: description,
+                  date: parsedDate,
+                });
+              }
+            }
+
+            if (transactions.length === 0) {
+              reject(new Error("읽을 수 있는 거래 내역이 없습니다."));
+              return;
+            }
+
+            resolve(transactions);
+            return;
+          }
+
+          // 기존 포맷 처리 (거래 내역 시트 형식)
           const expectedHeaders = [
             "날짜",
             "유형",
@@ -128,7 +255,7 @@ function App() {
           if (Object.keys(headerIndices).length < 4) {
             reject(
               new Error(
-                "엑셀 파일 형식이 올바르지 않습니다. (필수 컬럼: 날짜, 유형, 금액, 내용)"
+                "엑셀 파일 형식이 올바르지 않습니다. (지원 형식: 날짜/내역/입금/출금 또는 거래 내역 시트)"
               )
             );
             return;
@@ -306,6 +433,17 @@ function App() {
   const handleDelete = (id) => {
     if (window.confirm("정말 삭제하시겠습니까?")) {
       setTransactions(transactions.filter((t) => t.id !== id));
+    }
+  };
+
+  const handleDeleteAll = () => {
+    if (
+      window.confirm(
+        "모든 거래 내역을 삭제하시겠습니까?\n\n이 작업은 되돌릴 수 없습니다."
+      )
+    ) {
+      setTransactions([]);
+      localStorage.setItem("accountBook", JSON.stringify([]));
     }
   };
 
@@ -780,6 +918,7 @@ function App() {
           let isWooriBankFormat = false; // 우리은행 형식 여부
           let isKbBankFormat = false; // 국민은행 형식 여부
           let isSamsungCardFormat = false; // 삼성카드 형식 여부
+          let isSimpleDepositWithdrawalFormat = false; // 간단한 입금/출금 포맷 (날짜, 내역, 입금, 출금)
 
           for (let i = 0; i < jsonData.length; i++) {
             const row = jsonData[i];
@@ -788,6 +927,62 @@ function App() {
             // 셀 값을 문자열로 변환 (소문자 변환 없이 원본 유지)
             const rowStrings = row.map((cell) => String(cell || "").trim());
             const rowLower = rowStrings.map((cell) => cell.toLowerCase());
+
+            // 간단한 입금/출금 포맷 감지 (날짜, 내역, 입금, 출금)
+            const hasSimpleDate = rowStrings.some((cell) => {
+              const cellTrimmed = cell.trim();
+              return cellTrimmed === "날짜";
+            });
+            const hasSimpleDetail = rowStrings.some((cell) => {
+              const cellTrimmed = cell.trim();
+              return cellTrimmed === "내역";
+            });
+            const hasSimpleDeposit = rowStrings.some((cell) => {
+              const cellTrimmed = cell.trim();
+              return cellTrimmed === "입금";
+            });
+            const hasSimpleWithdrawal = rowStrings.some((cell) => {
+              const cellTrimmed = cell.trim();
+              return cellTrimmed === "출금";
+            });
+
+            // 간단한 입금/출금 포맷 감지 (우선순위 높음)
+            if (
+              hasSimpleDate &&
+              hasSimpleDetail &&
+              (hasSimpleDeposit || hasSimpleWithdrawal)
+            ) {
+              isSimpleDepositWithdrawalFormat = true;
+              headerRowIndex = i;
+              console.log("간단한 입금/출금 포맷 감지됨, 헤더 행:", i);
+              console.log("헤더 행 데이터:", rowStrings);
+              rowStrings.forEach((cellValue, idx) => {
+                const cellTrimmed = cellValue.trim();
+                if (cellTrimmed === "날짜") {
+                  dateIndex = idx;
+                  console.log(`    → 날짜 인덱스: ${idx}`);
+                }
+                if (cellTrimmed === "내역") {
+                  merchantIndex = idx;
+                  console.log(`    → 내역 인덱스: ${idx}`);
+                }
+                if (cellTrimmed === "입금") {
+                  depositIndex = idx;
+                  console.log(`    → 입금 인덱스: ${idx}`);
+                }
+                if (cellTrimmed === "출금") {
+                  withdrawalIndex = idx;
+                  console.log(`    → 출금 인덱스: ${idx}`);
+                }
+              });
+              console.log("간단한 입금/출금 포맷 컬럼 인덱스:", {
+                dateIndex,
+                merchantIndex,
+                depositIndex,
+                withdrawalIndex,
+              });
+              break;
+            }
 
             // 국민은행 형식 감지 (출금액/입금액 컬럼이 있는지 확인)
             // 국민은행은 "출금액"과 "입금액" 컬럼이 명확하게 있음
@@ -1134,12 +1329,110 @@ function App() {
             isKbBankFormat,
             isWooriBankFormat,
             isSamsungCardFormat,
+            isSimpleDepositWithdrawalFormat,
           });
 
           const transactions = [];
 
           for (let i = headerRowIndex + 1; i < jsonData.length; i++) {
             const row = jsonData[i];
+
+            // 간단한 입금/출금 포맷 처리
+            if (isSimpleDepositWithdrawalFormat) {
+              if (
+                dateIndex === -1 ||
+                merchantIndex === -1 ||
+                (depositIndex === -1 && withdrawalIndex === -1)
+              ) {
+                continue;
+              }
+
+              const dateStr = String(row[dateIndex] || "").trim();
+              const description = String(row[merchantIndex] || "").trim();
+              const deposit =
+                depositIndex >= 0
+                  ? parseFloat(
+                      String(row[depositIndex] || "").replace(/,/g, "")
+                    )
+                  : 0;
+              const withdrawal =
+                withdrawalIndex >= 0
+                  ? parseFloat(
+                      String(row[withdrawalIndex] || "").replace(/,/g, "")
+                    )
+                  : 0;
+
+              // 날짜와 내역이 없으면 건너뛰기
+              if (!dateStr || !description) {
+                continue;
+              }
+
+              // 입금과 출금이 모두 0이거나 없으면 건너뛰기
+              if (
+                (!deposit || deposit === 0) &&
+                (!withdrawal || withdrawal === 0)
+              ) {
+                continue;
+              }
+
+              // 날짜 형식 변환
+              let date = null;
+              if (!isNaN(parseFloat(dateStr)) && parseFloat(dateStr) > 25569) {
+                // 엑셀 날짜 숫자 형식
+                try {
+                  const excelDateNum = parseFloat(dateStr);
+                  const excelDate = XLSX.SSF.parse_date_code(excelDateNum);
+                  if (excelDate) {
+                    const year = excelDate.y;
+                    const month = String(excelDate.m).padStart(2, "0");
+                    const day = String(excelDate.d).padStart(2, "0");
+                    date = `${year}-${month}-${day}`;
+                  }
+                } catch (e) {
+                  // 파싱 실패 시 다음 방법 시도
+                }
+              } else if (dateStr.includes("/") || dateStr.includes("-")) {
+                // 일반 날짜 문자열 처리
+                const dateObj = new Date(dateStr);
+                if (!isNaN(dateObj.getTime())) {
+                  date = dateObj.toISOString().split("T")[0];
+                }
+              }
+
+              if (!date) {
+                continue;
+              }
+
+              // 입금이 있으면 수입으로 추가
+              if (deposit && deposit > 0) {
+                transactions.push({
+                  id: Date.now() + i * 2,
+                  type: "income",
+                  category: "",
+                  subCategory: "",
+                  account: selectedAccount || "",
+                  amount: deposit,
+                  description: description,
+                  date: date,
+                });
+              }
+
+              // 출금이 있으면 지출로 추가
+              if (withdrawal && withdrawal > 0) {
+                transactions.push({
+                  id: Date.now() + i * 2 + 1,
+                  type: "expense",
+                  category: "",
+                  subCategory: "",
+                  account: selectedAccount || "",
+                  amount: withdrawal,
+                  description: description,
+                  date: date,
+                });
+              }
+
+              continue;
+            }
 
             // 삼성카드 형식 처리
             if (isSamsungCardFormat) {
@@ -2108,15 +2401,11 @@ function App() {
         <div className="summary">
           <div className="summary-item income">
             <span className="label">수입</span>
-            <span className="amount">
-              +{totalIncome.toLocaleString()}원
-            </span>
+            <span className="amount">+{totalIncome.toLocaleString()}원</span>
           </div>
           <div className="summary-item expense">
             <span className="label">지출</span>
-            <span className="amount">
-              -{totalExpense.toLocaleString()}원
-            </span>
+            <span className="amount">-{totalExpense.toLocaleString()}원</span>
           </div>
           <div className="summary-item balance">
             <span className="label">잔액</span>
@@ -2180,465 +2469,466 @@ function App() {
 
       <main className="main">
         <section className="form-section">
-              <h2>내역 추가</h2>
+          <h2>내역 추가</h2>
 
-              <form onSubmit={handleSubmit} className="transaction-form">
-                <div className="form-group">
-                  <label>유형</label>
-                  <div className="type-buttons">
-                    <button
-                      type="button"
-                      className={
-                        formData.type === "income" ? "active income" : ""
-                      }
-                      onClick={() =>
-                        setFormData({
-                          ...formData,
-                          type: "income",
-                          category: "",
-                        })
-                      }
-                    >
-                      수입
-                    </button>
-                    <button
-                      type="button"
-                      className={
-                        formData.type === "expense" ? "active expense" : ""
-                      }
-                      onClick={() =>
-                        setFormData({
-                          ...formData,
-                          type: "expense",
-                          category: "",
-                        })
-                      }
-                    >
-                      지출
-                    </button>
-                  </div>
-                </div>
+          <form onSubmit={handleSubmit} className="transaction-form">
+            <div className="form-group">
+              <label>유형</label>
+              <div className="type-buttons">
+                <button
+                  type="button"
+                  className={formData.type === "income" ? "active income" : ""}
+                  onClick={() =>
+                    setFormData({
+                      ...formData,
+                      type: "income",
+                      category: "",
+                    })
+                  }
+                >
+                  수입
+                </button>
+                <button
+                  type="button"
+                  className={
+                    formData.type === "expense" ? "active expense" : ""
+                  }
+                  onClick={() =>
+                    setFormData({
+                      ...formData,
+                      type: "expense",
+                      category: "",
+                    })
+                  }
+                >
+                  지출
+                </button>
+              </div>
+            </div>
 
+            <div className="form-group">
+              <label>카테고리</label>
+              <select
+                value={formData.category}
+                onChange={(e) =>
+                  setFormData({
+                    ...formData,
+                    category: e.target.value,
+                    subCategory: "",
+                  })
+                }
+                required
+              >
+                <option value="">선택하세요</option>
+                {categories[formData.type].map((cat) => (
+                  <option key={cat} value={cat}>
+                    {cat}
+                  </option>
+                ))}
+              </select>
+            </div>
+
+            {formData.category &&
+              config.subCategories[formData.category] &&
+              config.subCategories[formData.category].length > 0 && (
                 <div className="form-group">
-                  <label>카테고리</label>
+                  <label>서브 카테고리</label>
                   <select
-                    value={formData.category}
+                    value={formData.subCategory}
                     onChange={(e) =>
                       setFormData({
                         ...formData,
-                        category: e.target.value,
-                        subCategory: "",
+                        subCategory: e.target.value,
                       })
                     }
-                    required
                   >
-                    <option value="">선택하세요</option>
-                    {categories[formData.type].map((cat) => (
-                      <option key={cat} value={cat}>
-                        {cat}
+                    <option value="">선택 안함</option>
+                    {config.subCategories[formData.category].map((subCat) => (
+                      <option key={subCat} value={subCat}>
+                        {subCat}
                       </option>
                     ))}
                   </select>
                 </div>
+              )}
 
-                {formData.category &&
-                  config.subCategories[formData.category] &&
-                  config.subCategories[formData.category].length > 0 && (
-                    <div className="form-group">
-                      <label>서브 카테고리</label>
-                      <select
-                        value={formData.subCategory}
-                        onChange={(e) =>
-                          setFormData({
-                            ...formData,
-                            subCategory: e.target.value,
-                          })
-                        }
-                      >
-                        <option value="">선택 안함</option>
-                        {config.subCategories[formData.category].map(
-                          (subCat) => (
-                            <option key={subCat} value={subCat}>
-                              {subCat}
-                            </option>
-                          )
-                        )}
-                      </select>
-                    </div>
-                  )}
+            <div className="form-group">
+              <label>금액</label>
+              <input
+                type="number"
+                value={formData.amount}
+                onChange={(e) =>
+                  setFormData({ ...formData, amount: e.target.value })
+                }
+                placeholder="금액을 입력하세요"
+                min="0"
+                step="100"
+                required
+              />
+            </div>
 
-                <div className="form-group">
-                  <label>금액</label>
-                  <input
-                    type="number"
-                    value={formData.amount}
-                    onChange={(e) =>
-                      setFormData({ ...formData, amount: e.target.value })
-                    }
-                    placeholder="금액을 입력하세요"
-                    min="0"
-                    step="100"
-                    required
-                  />
-                </div>
+            <div className="form-group">
+              <label>내용</label>
+              <input
+                type="text"
+                value={formData.description}
+                onChange={(e) =>
+                  setFormData({ ...formData, description: e.target.value })
+                }
+                placeholder="내용을 입력하세요"
+                required
+              />
+            </div>
 
-                <div className="form-group">
-                  <label>내용</label>
-                  <input
-                    type="text"
-                    value={formData.description}
-                    onChange={(e) =>
-                      setFormData({ ...formData, description: e.target.value })
-                    }
-                    placeholder="내용을 입력하세요"
-                    required
-                  />
-                </div>
+            <div className="form-group">
+              <label>계좌</label>
+              <select
+                value={formData.account}
+                onChange={(e) =>
+                  setFormData({ ...formData, account: e.target.value })
+                }
+                required
+              >
+                <option value="">선택하세요</option>
+                {config.accounts.map((account) => (
+                  <option key={account} value={account}>
+                    {account}
+                  </option>
+                ))}
+              </select>
+            </div>
 
-                <div className="form-group">
-                  <label>계좌</label>
-                  <select
-                    value={formData.account}
-                    onChange={(e) =>
-                      setFormData({ ...formData, account: e.target.value })
-                    }
-                    required
-                  >
-                    <option value="">선택하세요</option>
-                    {config.accounts.map((account) => (
-                      <option key={account} value={account}>
-                        {account}
-                      </option>
-                    ))}
-                  </select>
-                </div>
+            <div className="form-group">
+              <label>날짜</label>
+              <input
+                type="date"
+                value={formData.date}
+                onChange={(e) =>
+                  setFormData({ ...formData, date: e.target.value })
+                }
+                required
+              />
+            </div>
 
-                <div className="form-group">
-                  <label>날짜</label>
-                  <input
-                    type="date"
-                    value={formData.date}
-                    onChange={(e) =>
-                      setFormData({ ...formData, date: e.target.value })
-                    }
-                    required
-                  />
-                </div>
+            <button type="submit" className="submit-btn">
+              추가하기
+            </button>
+          </form>
+        </section>
 
-                <button type="submit" className="submit-btn">
-                  추가하기
+        <section className="list-section">
+          <div className="filter-controls">
+            <div className="list-header">
+              <h2>내역 목록</h2>
+              <button
+                onClick={handleDeleteAll}
+                className="delete-all-btn"
+                title="모든 거래 내역 삭제"
+              >
+                🗑️ 전체 삭제
+              </button>
+            </div>
+            <div className="filters">
+              <select
+                value={filter}
+                onChange={(e) => setFilter(e.target.value)}
+                className="filter-select"
+              >
+                <option value="all">전체</option>
+                <option value="income">수입</option>
+                <option value="expense">지출</option>
+              </select>
+              <div className="sort-controls">
+                <select
+                  value={sortBy}
+                  onChange={(e) => setSortBy(e.target.value)}
+                  className="sort-select"
+                >
+                  <option value="date">날짜순</option>
+                  <option value="account">계좌순</option>
+                  <option value="category">카테고리순</option>
+                </select>
+                <button
+                  type="button"
+                  onClick={() =>
+                    setSortOrder(sortOrder === "asc" ? "desc" : "asc")
+                  }
+                  className="sort-order-btn"
+                  title={sortOrder === "asc" ? "오름차순" : "내림차순"}
+                >
+                  {sortOrder === "asc" ? "↑" : "↓"}
                 </button>
-              </form>
-            </section>
-
-            <section className="list-section">
-              <div className="filter-controls">
-                <div className="list-header">
-                  <h2>내역 목록</h2>
-                </div>
-                <div className="filters">
-                  <select
-                    value={filter}
-                    onChange={(e) => setFilter(e.target.value)}
-                    className="filter-select"
-                  >
-                    <option value="all">전체</option>
-                    <option value="income">수입</option>
-                    <option value="expense">지출</option>
-                  </select>
-                  <div className="sort-controls">
-                    <select
-                      value={sortBy}
-                      onChange={(e) => setSortBy(e.target.value)}
-                      className="sort-select"
-                    >
-                      <option value="date">날짜순</option>
-                      <option value="account">계좌순</option>
-                      <option value="category">카테고리순</option>
-                    </select>
-                    <button
-                      type="button"
-                      onClick={() =>
-                        setSortOrder(sortOrder === "asc" ? "desc" : "asc")
-                      }
-                      className="sort-order-btn"
-                      title={sortOrder === "asc" ? "오름차순" : "내림차순"}
-                    >
-                      {sortOrder === "asc" ? "↑" : "↓"}
-                    </button>
-                  </div>
-                  <div className="date-range-filters">
-                    <input
-                      type="date"
-                      value={startDate}
-                      onChange={(e) => setStartDate(e.target.value)}
-                      className="date-filter"
-                      placeholder="시작 날짜"
-                    />
-                    <span className="date-separator">~</span>
-                    <input
-                      type="date"
-                      value={endDate}
-                      onChange={(e) => setEndDate(e.target.value)}
-                      className="date-filter"
-                      placeholder="종료 날짜"
-                    />
-                    {(startDate || endDate) && (
-                      <button
-                        onClick={() => {
-                          setStartDate("");
-                          setEndDate("");
-                        }}
-                        className="clear-filter"
-                      >
-                        필터 초기화
-                      </button>
-                    )}
-                  </div>
-                  <button
-                    onClick={handleExportToExcel}
-                    className="export-excel-btn"
-                    title="엑셀 파일로 내보내기"
-                  >
-                    📊 엑셀 내보내기
-                  </button>
-                </div>
               </div>
-
-              <div className="transaction-list">
-                {filteredTransactions.length === 0 ? (
-                  <div className="empty-state">
-                    <p>내역이 없습니다.</p>
-                  </div>
-                ) : (
-                  filteredTransactions.map((transaction) => (
-                    <div
-                      key={transaction.id}
-                      className={`transaction-item ${transaction.type}`}
-                    >
-                      <div className="transaction-info">
-                        {editingTransaction === transaction.id ? (
-                          <div className="transaction-edit-form">
-                            <div className="edit-form-row">
-                              <div className="edit-form-group">
-                                <label>날짜</label>
-                                <input
-                                  type="date"
-                                  value={editingTransactionData.date}
-                                  onChange={(e) =>
-                                    setEditingTransactionData({
-                                      ...editingTransactionData,
-                                      date: e.target.value,
-                                    })
-                                  }
-                                  className="transaction-edit-input"
-                                  required
-                                />
-                              </div>
-                              <div className="edit-form-group">
-                                <label>유형</label>
-                                <select
-                                  value={editingTransactionData.type}
-                                  onChange={(e) =>
-                                    setEditingTransactionData({
-                                      ...editingTransactionData,
-                                      type: e.target.value,
-                                      category: "",
-                                      subCategory: "",
-                                    })
-                                  }
-                                  className="transaction-edit-select"
-                                  required
-                                >
-                                  <option value="income">수입</option>
-                                  <option value="expense">지출</option>
-                                </select>
-                              </div>
-                            </div>
-                            <div className="edit-form-row">
-                              <div className="edit-form-group">
-                                <label>카테고리</label>
-                                <select
-                                  value={editingTransactionData.category}
-                                  onChange={(e) =>
-                                    setEditingTransactionData({
-                                      ...editingTransactionData,
-                                      category: e.target.value,
-                                      subCategory: "",
-                                    })
-                                  }
-                                  className="transaction-edit-select"
-                                  required
-                                >
-                                  <option value="">선택하세요</option>
-                                  {config.categories[
-                                    editingTransactionData.type
-                                  ]?.map((cat) => (
-                                    <option key={cat} value={cat}>
-                                      {cat}
-                                    </option>
-                                  ))}
-                                </select>
-                              </div>
-                              <div className="edit-form-group">
-                                <label>서브 카테고리</label>
-                                <select
-                                  value={editingTransactionData.subCategory}
-                                  onChange={(e) =>
-                                    setEditingTransactionData({
-                                      ...editingTransactionData,
-                                      subCategory: e.target.value,
-                                    })
-                                  }
-                                  className="transaction-edit-select"
-                                >
-                                  <option value="">선택 안함</option>
-                                  {config.subCategories[
-                                    editingTransactionData.category
-                                  ]?.map((subCat) => (
-                                    <option key={subCat} value={subCat}>
-                                      {subCat}
-                                    </option>
-                                  ))}
-                                </select>
-                              </div>
-                            </div>
-                            <div className="edit-form-row">
-                              <div className="edit-form-group">
-                                <label>계좌</label>
-                                <select
-                                  value={editingTransactionData.account}
-                                  onChange={(e) =>
-                                    setEditingTransactionData({
-                                      ...editingTransactionData,
-                                      account: e.target.value,
-                                    })
-                                  }
-                                  className="transaction-edit-select"
-                                  required
-                                >
-                                  <option value="">선택하세요</option>
-                                  {config.accounts.map((account) => (
-                                    <option key={account} value={account}>
-                                      {account}
-                                    </option>
-                                  ))}
-                                </select>
-                              </div>
-                              <div className="edit-form-group">
-                                <label>금액</label>
-                                <input
-                                  type="number"
-                                  value={editingTransactionData.amount}
-                                  onChange={(e) =>
-                                    setEditingTransactionData({
-                                      ...editingTransactionData,
-                                      amount: e.target.value,
-                                    })
-                                  }
-                                  className="transaction-edit-input"
-                                  min="0"
-                                  step="100"
-                                  required
-                                />
-                              </div>
-                            </div>
-                            <div className="edit-form-row">
-                              <div className="edit-form-group full-width">
-                                <label>내용</label>
-                                <input
-                                  type="text"
-                                  value={editingTransactionData.description}
-                                  onChange={(e) =>
-                                    setEditingTransactionData({
-                                      ...editingTransactionData,
-                                      description: e.target.value,
-                                    })
-                                  }
-                                  className="transaction-edit-input"
-                                  required
-                                />
-                              </div>
-                            </div>
-                          </div>
-                        ) : (
-                          <>
-                            <div className="transaction-header">
-                              <div className="category-group">
-                                <span className="category">
-                                  {transaction.category}
-                                </span>
-                                {transaction.subCategory && (
-                                  <span className="sub-category">
-                                    {transaction.subCategory}
-                                  </span>
-                                )}
-                              </div>
-                              <span className={`amount ${transaction.type}`}>
-                                {transaction.type === "income" ? "+" : "-"}
-                                {transaction.amount.toLocaleString()}원
-                              </span>
-                            </div>
-                            <div className="transaction-details">
-                              <span className="description">
-                                {transaction.description}
-                              </span>
-                              <div className="transaction-meta">
-                                {transaction.account && (
-                                  <span className="account">
-                                    {transaction.account}
-                                  </span>
-                                )}
-                                <span className="date">{transaction.date}</span>
-                              </div>
-                            </div>
-                          </>
-                        )}
-                      </div>
-                      <div className="transaction-actions">
-                        {editingTransaction === transaction.id ? (
-                          <>
-                            <button
-                              onClick={() =>
-                                handleSaveTransaction(transaction.id)
-                              }
-                              className="save-btn"
-                              title="저장"
-                            >
-                              ✓
-                            </button>
-                            <button
-                              onClick={handleCancelEdit}
-                              className="cancel-btn"
-                              title="취소"
-                            >
-                              ✕
-                            </button>
-                          </>
-                        ) : (
-                          <>
-                            <button
-                              onClick={() => handleEditTransaction(transaction)}
-                              className="edit-btn"
-                              title="수정"
-                            >
-                              ✏️
-                            </button>
-                            <button
-                              onClick={() => handleDelete(transaction.id)}
-                              className="delete-btn"
-                              title="삭제"
-                            >
-                              🗑️
-                            </button>
-                          </>
-                        )}
-                      </div>
-                    </div>
-                  ))
+              <div className="date-range-filters">
+                <input
+                  type="date"
+                  value={startDate}
+                  onChange={(e) => setStartDate(e.target.value)}
+                  className="date-filter"
+                  placeholder="시작 날짜"
+                />
+                <span className="date-separator">~</span>
+                <input
+                  type="date"
+                  value={endDate}
+                  onChange={(e) => setEndDate(e.target.value)}
+                  className="date-filter"
+                  placeholder="종료 날짜"
+                />
+                {(startDate || endDate) && (
+                  <button
+                    onClick={() => {
+                      setStartDate("");
+                      setEndDate("");
+                    }}
+                    className="clear-filter"
+                  >
+                    필터 초기화
+                  </button>
                 )}
               </div>
-            </section>
+              <button
+                onClick={handleExportToExcel}
+                className="export-excel-btn"
+                title="엑셀 파일로 내보내기"
+              >
+                📊 엑셀 내보내기
+              </button>
+            </div>
+          </div>
+
+          <div className="transaction-list">
+            {filteredTransactions.length === 0 ? (
+              <div className="empty-state">
+                <p>내역이 없습니다.</p>
+              </div>
+            ) : (
+              filteredTransactions.map((transaction) => (
+                <div
+                  key={transaction.id}
+                  className={`transaction-item ${transaction.type}`}
+                >
+                  <div className="transaction-info">
+                    {editingTransaction === transaction.id ? (
+                      <div className="transaction-edit-form">
+                        <div className="edit-form-row">
+                          <div className="edit-form-group">
+                            <label>날짜</label>
+                            <input
+                              type="date"
+                              value={editingTransactionData.date}
+                              onChange={(e) =>
+                                setEditingTransactionData({
+                                  ...editingTransactionData,
+                                  date: e.target.value,
+                                })
+                              }
+                              className="transaction-edit-input"
+                              required
+                            />
+                          </div>
+                          <div className="edit-form-group">
+                            <label>유형</label>
+                            <select
+                              value={editingTransactionData.type}
+                              onChange={(e) =>
+                                setEditingTransactionData({
+                                  ...editingTransactionData,
+                                  type: e.target.value,
+                                  category: "",
+                                  subCategory: "",
+                                })
+                              }
+                              className="transaction-edit-select"
+                              required
+                            >
+                              <option value="income">수입</option>
+                              <option value="expense">지출</option>
+                            </select>
+                          </div>
+                        </div>
+                        <div className="edit-form-row">
+                          <div className="edit-form-group">
+                            <label>카테고리</label>
+                            <select
+                              value={editingTransactionData.category}
+                              onChange={(e) =>
+                                setEditingTransactionData({
+                                  ...editingTransactionData,
+                                  category: e.target.value,
+                                  subCategory: "",
+                                })
+                              }
+                              className="transaction-edit-select"
+                              required
+                            >
+                              <option value="">선택하세요</option>
+                              {config.categories[
+                                editingTransactionData.type
+                              ]?.map((cat) => (
+                                <option key={cat} value={cat}>
+                                  {cat}
+                                </option>
+                              ))}
+                            </select>
+                          </div>
+                          <div className="edit-form-group">
+                            <label>서브 카테고리</label>
+                            <select
+                              value={editingTransactionData.subCategory}
+                              onChange={(e) =>
+                                setEditingTransactionData({
+                                  ...editingTransactionData,
+                                  subCategory: e.target.value,
+                                })
+                              }
+                              className="transaction-edit-select"
+                            >
+                              <option value="">선택 안함</option>
+                              {config.subCategories[
+                                editingTransactionData.category
+                              ]?.map((subCat) => (
+                                <option key={subCat} value={subCat}>
+                                  {subCat}
+                                </option>
+                              ))}
+                            </select>
+                          </div>
+                        </div>
+                        <div className="edit-form-row">
+                          <div className="edit-form-group">
+                            <label>계좌</label>
+                            <select
+                              value={editingTransactionData.account}
+                              onChange={(e) =>
+                                setEditingTransactionData({
+                                  ...editingTransactionData,
+                                  account: e.target.value,
+                                })
+                              }
+                              className="transaction-edit-select"
+                              required
+                            >
+                              <option value="">선택하세요</option>
+                              {config.accounts.map((account) => (
+                                <option key={account} value={account}>
+                                  {account}
+                                </option>
+                              ))}
+                            </select>
+                          </div>
+                          <div className="edit-form-group">
+                            <label>금액</label>
+                            <input
+                              type="number"
+                              value={editingTransactionData.amount}
+                              onChange={(e) =>
+                                setEditingTransactionData({
+                                  ...editingTransactionData,
+                                  amount: e.target.value,
+                                })
+                              }
+                              className="transaction-edit-input"
+                              min="0"
+                              step="100"
+                              required
+                            />
+                          </div>
+                        </div>
+                        <div className="edit-form-row">
+                          <div className="edit-form-group full-width">
+                            <label>내용</label>
+                            <input
+                              type="text"
+                              value={editingTransactionData.description}
+                              onChange={(e) =>
+                                setEditingTransactionData({
+                                  ...editingTransactionData,
+                                  description: e.target.value,
+                                })
+                              }
+                              className="transaction-edit-input"
+                              required
+                            />
+                          </div>
+                        </div>
+                      </div>
+                    ) : (
+                      <>
+                        <div className="transaction-header">
+                          <div className="category-group">
+                            <span className="category">
+                              {transaction.category}
+                            </span>
+                            {transaction.subCategory && (
+                              <span className="sub-category">
+                                {transaction.subCategory}
+                              </span>
+                            )}
+                          </div>
+                          <span className={`amount ${transaction.type}`}>
+                            {transaction.type === "income" ? "+" : "-"}
+                            {transaction.amount.toLocaleString()}원
+                          </span>
+                        </div>
+                        <div className="transaction-details">
+                          <span className="description">
+                            {transaction.description}
+                          </span>
+                          <div className="transaction-meta">
+                            {transaction.account && (
+                              <span className="account">
+                                {transaction.account}
+                              </span>
+                            )}
+                            <span className="date">{transaction.date}</span>
+                          </div>
+                        </div>
+                      </>
+                    )}
+                  </div>
+                  <div className="transaction-actions">
+                    {editingTransaction === transaction.id ? (
+                      <>
+                        <button
+                          onClick={() => handleSaveTransaction(transaction.id)}
+                          className="save-btn"
+                          title="저장"
+                        >
+                          ✓
+                        </button>
+                        <button
+                          onClick={handleCancelEdit}
+                          className="cancel-btn"
+                          title="취소"
+                        >
+                          ✕
+                        </button>
+                      </>
+                    ) : (
+                      <>
+                        <button
+                          onClick={() => handleEditTransaction(transaction)}
+                          className="edit-btn"
+                          title="수정"
+                        >
+                          ✏️
+                        </button>
+                        <button
+                          onClick={() => handleDelete(transaction.id)}
+                          className="delete-btn"
+                          title="삭제"
+                        >
+                          🗑️
+                        </button>
+                      </>
+                    )}
+                  </div>
+                </div>
+              ))
+            )}
+          </div>
+        </section>
       </main>
 
       {/* 파일명 입력 모달 */}
