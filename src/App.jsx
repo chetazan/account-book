@@ -442,8 +442,16 @@ function App() {
         "모든 거래 내역을 삭제하시겠습니까?\n\n이 작업은 되돌릴 수 없습니다."
       )
     ) {
+      // 로컬스토리지 먼저 초기화
+      try {
+        localStorage.setItem("accountBook", JSON.stringify([]));
+      } catch (error) {
+        console.error("로컬스토리지 초기화 오류:", error);
+      }
+      // 거래 내역 초기화 (이렇게 하면 useEffect가 자동으로 저장하지만 이미 저장했으므로 중복 저장 방지)
       setTransactions([]);
-      localStorage.setItem("accountBook", JSON.stringify([]));
+      // isInitialLoad를 false로 설정하여 자동 저장이 작동하도록 보장
+      isInitialLoad.current = false;
     }
   };
 
@@ -2238,6 +2246,32 @@ function App() {
 
   const balance = totalIncome - totalExpense;
 
+  // 계좌별 수입/지출/잔액 계산
+  const accountSummary = {};
+  transactions.forEach((transaction) => {
+    const account = transaction.account || "미지정";
+    if (!accountSummary[account]) {
+      accountSummary[account] = { income: 0, expense: 0 };
+    }
+    if (transaction.type === "income") {
+      accountSummary[account].income += transaction.amount;
+    } else {
+      accountSummary[account].expense += transaction.amount;
+    }
+  });
+
+  const accountBalances = Object.keys(accountSummary)
+    .map((account) => ({
+      account,
+      income: accountSummary[account].income,
+      expense: accountSummary[account].expense,
+      balance: accountSummary[account].income - accountSummary[account].expense,
+    }))
+    .sort((a, b) => {
+      // 계좌명으로 정렬
+      return a.account.localeCompare(b.account);
+    });
+
   // 엑셀 파일로 내보내기
   const handleExportToExcel = () => {
     // 기본 파일명 설정
@@ -2416,6 +2450,44 @@ function App() {
             </span>
           </div>
         </div>
+        {accountBalances.length > 0 && (
+          <div className="account-summary-section">
+            <h3>계좌별 요약</h3>
+            <div className="account-summary-grid">
+              {accountBalances.map(({ account, income, expense, balance }) => (
+                <div key={account} className="account-summary-card">
+                  <div className="account-summary-header">
+                    <span className="account-summary-name">{account}</span>
+                  </div>
+                  <div className="account-summary-details">
+                    <div className="account-summary-item">
+                      <span className="account-summary-label">수입</span>
+                      <span className="account-summary-amount income">
+                        +{income.toLocaleString()}원
+                      </span>
+                    </div>
+                    <div className="account-summary-item">
+                      <span className="account-summary-label">지출</span>
+                      <span className="account-summary-amount expense">
+                        -{expense.toLocaleString()}원
+                      </span>
+                    </div>
+                    <div className="account-summary-item">
+                      <span className="account-summary-label">잔액</span>
+                      <span
+                        className={`account-summary-amount ${
+                          balance >= 0 ? "positive" : "negative"
+                        }`}
+                      >
+                        {balance.toLocaleString()}원
+                      </span>
+                    </div>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
         <div className="file-management-summary">
           <div className="file-management-item">
             <div className="file-management-icon">➕</div>
@@ -2562,7 +2634,7 @@ function App() {
                 }
                 placeholder="금액을 입력하세요"
                 min="0"
-                step="100"
+                step="1"
                 required
               />
             </div>
@@ -2830,7 +2902,7 @@ function App() {
                               }
                               className="transaction-edit-input"
                               min="0"
-                              step="100"
+                              step="1"
                               required
                             />
                           </div>
