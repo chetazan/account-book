@@ -37,9 +37,52 @@ function App() {
   const [selectedAccountForUpload, setSelectedAccountForUpload] = useState("");
   const [showFileNameModal, setShowFileNameModal] = useState(false);
   const [exportFileName, setExportFileName] = useState("");
+  const [isLoggedIn, setIsLoggedIn] = useState(false);
+  const [loginId, setLoginId] = useState("");
+  const [loginPassword, setLoginPassword] = useState("");
+  const [loginError, setLoginError] = useState("");
   const fileInputRef = useRef(null);
   const mainFileInputRef = useRef(null);
   const isInitialLoad = useRef(true);
+
+  // 환경 변수에서 로그인 정보 가져오기
+  const validUserId = import.meta.env.VITE_APP_USER_ID || "admin";
+  const validPassword = import.meta.env.VITE_APP_USER_PASSWORD || "password123";
+
+  // 로그인 상태 확인 (세션 스토리지에서)
+  useEffect(() => {
+    const loggedIn = sessionStorage.getItem("isLoggedIn") === "true";
+    setIsLoggedIn(loggedIn);
+  }, []);
+
+  // 로그인 처리
+  const handleLogin = (e) => {
+    e.preventDefault();
+    setLoginError("");
+
+    if (loginId.trim() === "" || loginPassword.trim() === "") {
+      setLoginError("ID와 비밀번호를 입력해주세요.");
+      return;
+    }
+
+    if (loginId === validUserId && loginPassword === validPassword) {
+      setIsLoggedIn(true);
+      sessionStorage.setItem("isLoggedIn", "true");
+      setLoginId("");
+      setLoginPassword("");
+      setLoginError("");
+    } else {
+      setLoginError("ID 또는 비밀번호가 올바르지 않습니다.");
+    }
+  };
+
+  // 로그아웃 처리
+  const handleLogout = () => {
+    setIsLoggedIn(false);
+    sessionStorage.removeItem("isLoggedIn");
+    setLoginId("");
+    setLoginPassword("");
+  };
 
   // 로컬 스토리지에서 거래 내역 불러오기 (새로고침 시)
   useEffect(() => {
@@ -2428,10 +2471,65 @@ function App() {
     }
   };
 
+  // 로그인하지 않았을 때 로그인 화면 표시
+  if (!isLoggedIn) {
+    return (
+      <div className="app">
+        <div className="login-container">
+          <div className="login-card">
+            <h1>💰 가계부</h1>
+            <h2>로그인</h2>
+            <form onSubmit={handleLogin} className="login-form">
+              <div className="login-form-group">
+                <label htmlFor="login-id">ID</label>
+                <input
+                  id="login-id"
+                  type="text"
+                  value={loginId}
+                  onChange={(e) => setLoginId(e.target.value)}
+                  placeholder="ID를 입력하세요"
+                  autoFocus
+                  className="login-input"
+                />
+              </div>
+              <div className="login-form-group">
+                <label htmlFor="login-password">비밀번호</label>
+                <input
+                  id="login-password"
+                  type="password"
+                  value={loginPassword}
+                  onChange={(e) => setLoginPassword(e.target.value)}
+                  placeholder="비밀번호를 입력하세요"
+                  className="login-input"
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") {
+                      handleLogin(e);
+                    }
+                  }}
+                />
+              </div>
+              {loginError && (
+                <div className="login-error">{loginError}</div>
+              )}
+              <button type="submit" className="login-button">
+                로그인
+              </button>
+            </form>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="app">
       <header className="header">
-        <h1>💰 가계부</h1>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "10px" }}>
+          <h1>💰 가계부</h1>
+          <button onClick={handleLogout} className="logout-button" title="로그아웃">
+            로그아웃
+          </button>
+        </div>
         <div className="summary">
           <div className="summary-item income">
             <span className="label">수입</span>
